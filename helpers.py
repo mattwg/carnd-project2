@@ -114,10 +114,10 @@ def fully_connected_layer(input,              # previous layer.
     return layer
 
 
-def train_model_generator(model_name, init, loss, features, labels, 
+def train_model_generator(model_name, loss, features, labels, 
                 generator, batches_per_epoch, valid_feed_dict, 
                 accuracy, predicted_class,
-                epochs, learning_rate, early_stopping_rounds, opt="GD"):
+                epochs, learning_rate, early_stopping_rounds, opt="GD", interactive=False):
 
     if (opt == "GD"):
         optimizer = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss)    
@@ -136,68 +136,74 @@ def train_model_generator(model_name, init, loss, features, labels,
     loss_batch = []
     train_acc_batch = []
     valid_acc_batch = []
-
-    with tf.Session() as session:
+    
+    if interactive:
+        session = tf.InteractiveSession()
+        tf.initialize_all_variables().run()
+    else:
+        session = tf.Session()
+        init = tf.initialize_all_variables()
         session.run(init)
+        
+    
+    # Early stopping flags
+    epoch_i = 0
+    continue_training = True
+    consider_stopping = False
+    epochs_since_better = 0
+    best_accuracy = 0.0
 
-        # Early stopping flags
-        epoch_i = 0
-        continue_training = True
-        consider_stopping = False
-        epochs_since_better = 0
-        best_accuracy = 0.0
+    with tqdm(range(epochs), unit='epochs') as pbar: 
+        while epoch_i < epochs and continue_training:
+            batch_i = 0
+            while batch_i < batches_per_epoch and continue_training:
 
-        with tqdm(range(epochs), unit='epochs') as pbar: 
-            while epoch_i < epochs and continue_training:
-                batch_i = 0
-                while batch_i < batches_per_epoch and continue_training:
+                # Get a batch of training features and labels from generator
+                batch_data = generator.__next__()
 
-                    # Get a batch of training features and labels from generator
-                    batch_data = generator.__next__()
+                # Run optimizer and get loss
+                _, l = session.run(
+                    [optimizer, loss],
+                    feed_dict={features: batch_data[0], labels: batch_data[1]})
 
-                    # Run optimizer and get loss
-                    _, l = session.run(
-                        [optimizer, loss],
-                        feed_dict={features: batch_data[0], labels: batch_data[1]})
+                # Log every 50 batches
+                if not batch_i % log_batch_step:
+                    # Calculate Training and Validation accuracy
+                    training_accuracy = session.run(accuracy, feed_dict={features: batch_data[0], labels: batch_data[1]})
+                    validation_accuracy = session.run(accuracy, feed_dict=valid_feed_dict)
 
-                    # Log every 50 batches
-                    if not batch_i % log_batch_step:
-                        # Calculate Training and Validation accuracy
-                        training_accuracy = session.run(accuracy, feed_dict={features: batch_data[0], labels: batch_data[1]})
-                        validation_accuracy = session.run(accuracy, feed_dict=valid_feed_dict)
+                    # Log batches
+                    previous_batch = batches[-1] if batches else 0
+                    batches.append(log_batch_step + previous_batch)
+                    loss_batch.append(l)
+                    train_acc_batch.append(training_accuracy)
+                    valid_acc_batch.append(validation_accuracy)
 
-                        # Log batches
-                        previous_batch = batches[-1] if batches else 0
-                        batches.append(log_batch_step + previous_batch)
-                        loss_batch.append(l)
-                        train_acc_batch.append(training_accuracy)
-                        valid_acc_batch.append(validation_accuracy)
+                batch_i += 1
 
-                    batch_i += 1
+            # Check accuracy against Validation data
+            validation_accuracy = session.run(accuracy, feed_dict=valid_feed_dict)
+            # Get predicted class
+            y_pred = session.run(predicted_class, feed_dict=valid_feed_dict)
 
-                # Check accuracy against Validation data
-                validation_accuracy = session.run(accuracy, feed_dict=valid_feed_dict)
-                # Get predicted class
-                y_pred = session.run(predicted_class, feed_dict=valid_feed_dict)
-
-                # Early stopping?
-                if validation_accuracy < best_accuracy:    
-                    if consider_stopping:
-                        epochs_since_better += 1
-                    else:
-                        consider_stopping = True
-                        epochs_since_better = 1
+            # Early stopping?
+            if validation_accuracy < best_accuracy:    
+                if consider_stopping:
+                    epochs_since_better += 1
                 else:
-                    best_accuracy = validation_accuracy
-                    saver.save(session, model_name + ".ckpt")
-                    consider_stopping = False
+                    consider_stopping = True
+                    epochs_since_better = 1
+            else:
+                best_accuracy = validation_accuracy
+                saver.save(session, model_name + ".ckpt")
+                consider_stopping = False
 
-                if epochs_since_better > early_stopping_rounds:
-                        print('Stopping no improvement for {} epochs'.format(early_stopping_rounds))
-                        continue_training = False
+            if epochs_since_better > early_stopping_rounds:
+                print('Stopping no improvement for {} epochs'.format(early_stopping_rounds))
+                continue_training = False
 
-                epoch_i += 1
-                pbar.update(1)
+            epoch_i += 1
+            pbar.update(1)
 
         # Restore best model
         saver.restore(session, model_name + ".ckpt")
@@ -215,13 +221,15 @@ def train_model_generator(model_name, init, loss, features, labels,
                    "epochs" : epochs,
                    "learning_rate" : learning_rate
                  }
+
+        session.close()
         
     return result 
 
-def train_model(model_name, init, loss, features, labels, 
+def train_model(model_name, loss, features, labels, 
                 X_train, y_train, train_feed_dict, valid_feed_dict, 
                 accuracy, predicted_class,
-                epochs, batch_size, learning_rate, early_stopping_rounds, opt="GD"):
+                epochs, batch_size, learning_rate, early_stopping_rounds, opt="GD", interactive=False):
 
     if (opt == "GD"):
         optimizer = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss)    
@@ -241,70 +249,76 @@ def train_model(model_name, init, loss, features, labels,
     train_acc_batch = []
     valid_acc_batch = []
 
-    with tf.Session() as session:
+    if interactive:
+        session = tf.InteractiveSession()
+        tf.initialize_all_variables().run()
+    else:
+        session = tf.Session()
+        init = tf.initialize_all_variables()
         session.run(init)
-        batch_count = int(math.ceil(len(X_train)/batch_size))
+         
+    batch_count = int(math.ceil(len(X_train)/batch_size))
 
-        # Early stopping flags
-        epoch_i = 0
-        continue_training = True
-        consider_stopping = False
-        epochs_since_better = 0
-        best_accuracy = 0.0
+    # Early stopping flags
+    epoch_i = 0
+    continue_training = True
+    consider_stopping = False
+    epochs_since_better = 0
+    best_accuracy = 0.0
 
-        with tqdm(range(epochs), unit='epochs') as pbar: 
-            while epoch_i < epochs and continue_training:
-                batch_i = 0
-                while batch_i < batch_count and continue_training:
+    with tqdm(range(epochs), unit='epochs') as pbar: 
+        while epoch_i < epochs and continue_training:
+            batch_i = 0
+            while batch_i < batch_count and continue_training:
 
-                    # Get a batch of training features and labels
-                    batch_start = batch_i*batch_size
-                    batch_features = X_train[batch_start:batch_start + batch_size]
-                    batch_labels = y_train[batch_start:batch_start + batch_size]
+                # Get a batch of training features and labels
+                batch_start = batch_i*batch_size
+                batch_features = X_train[batch_start:batch_start + batch_size]
+                batch_labels = y_train[batch_start:batch_start + batch_size]
 
-                    # Run optimizer and get loss
-                    _, l = session.run(
-                        [optimizer, loss],
-                        feed_dict={features: batch_features, labels: batch_labels})
+                # Run optimizer and get loss
+                _, l = session.run(
+                    [optimizer, loss],
+                    feed_dict={features: batch_features, labels: batch_labels})
 
-                    # Log every 50 batches
-                    if not batch_i % log_batch_step:
-                        # Calculate Training and Validation accuracy
-                        training_accuracy = session.run(accuracy, feed_dict=train_feed_dict)
-                        validation_accuracy = session.run(accuracy, feed_dict=valid_feed_dict)
+                # Log every 50 batches
+                if not batch_i % log_batch_step:
+                    # Calculate Training and Validation accuracy
+                    training_accuracy = session.run(accuracy, feed_dict={features: batch_features, labels: batch_labels})
+                    validation_accuracy = session.run(accuracy, feed_dict=valid_feed_dict)
 
-                        # Log batches
-                        previous_batch = batches[-1] if batches else 0
-                        batches.append(log_batch_step + previous_batch)
-                        loss_batch.append(l)
-                        train_acc_batch.append(training_accuracy)
-                        valid_acc_batch.append(validation_accuracy)
+                    # Log batches
+                    previous_batch = batches[-1] if batches else 0
+                    batches.append(log_batch_step + previous_batch)
+                    loss_batch.append(l)
+                    train_acc_batch.append(training_accuracy)
+                    valid_acc_batch.append(validation_accuracy)
 
-                    batch_i += 1
+                batch_i += 1
 
-                # Check accuracy against Validation data
-                validation_accuracy = session.run(accuracy, feed_dict=valid_feed_dict)
-                # Get predicted class
-                y_pred = session.run(predicted_class, feed_dict=valid_feed_dict)
+            # Check accuracy against Validation data
+            validation_accuracy = session.run(accuracy, feed_dict=valid_feed_dict)
+            # Get predicted class
+            y_pred = session.run(predicted_class, feed_dict=valid_feed_dict)
 
-                # Early stopping?
-                if validation_accuracy < best_accuracy:    
-                    if consider_stopping:
-                        epochs_since_better += 1
-                    else:
-                        consider_stopping = True
-                        epochs_since_better = 1
+            # Early stopping?
+            if validation_accuracy < best_accuracy:    
+                if consider_stopping:
+                    epochs_since_better += 1
                 else:
-                    best_accuracy = validation_accuracy
-                    saver.save(session, model_name + ".ckpt")
-                    consider_stopping = False
+                    consider_stopping = True
+                    epochs_since_better = 1
+            else:
+                best_accuracy = validation_accuracy
+                saver.save(session, model_name + ".ckpt")
+                consider_stopping = False
 
-                if epochs_since_better > early_stopping_rounds:
-                        print('Stopping no improvement for {} epochs'.format(early_stopping_rounds))
-                        continue_training = False
+            if epochs_since_better > early_stopping_rounds:
+                print('Stopping no improvement for {} epochs'.format(early_stopping_rounds))
+                continue_training = False
 
-                epoch_i += 1
-                pbar.update(1)
+            epoch_i += 1
+            pbar.update(1)
 
         # Restore best model
         saver.restore(session, model_name + ".ckpt")
@@ -323,6 +337,7 @@ def train_model(model_name, init, loss, features, labels,
                    "batch_size" : batch_size,
                    "learning_rate" : learning_rate
                  }
+        session.close()
         
     return result 
 
@@ -444,6 +459,7 @@ def plot_image_grid(images, indices, grayscale = False):
                 ax.imshow(images[idx])  
         ax.set_xticks([])
         ax.set_yticks([])
+    return fig
         
 
 # Create nested lists keyed on class
